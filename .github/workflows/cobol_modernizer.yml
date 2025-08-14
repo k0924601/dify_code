@@ -76,8 +76,9 @@ jobs:
           echo "$JSON_PAYLOAD"
           echo "------------------------------------"
           
-          # 步驟 4.4: 呼叫 Dify 執行工作流 API
+          # 步驟 4.4: 呼叫 Dify 執行工作流 API，並增加超時設定
           RESPONSE_JSON=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+                            --max-time 300 \
                             -H "Authorization: Bearer ${{ secrets.DIFY_API_KEY }}" \
                             -H "Content-Type: application/json" \
                             -d "$JSON_PAYLOAD")
@@ -86,6 +87,12 @@ jobs:
           echo "--- Response received from Dify: ---"
           echo "$RESPONSE_JSON"
           echo "------------------------------------"
+
+          # 新增：檢查收到的回應是否為有效的 JSON，如果不是就提前失敗
+          if ! echo "$RESPONSE_JSON" | jq -e . > /dev/null; then
+            echo "::error::Received an invalid JSON response from Dify, likely due to a timeout. See response above."
+            exit 1
+          fi
 
           # 步驟 4.5: 從 Dify 的回應中提取 OpenAPI Spec 內容
           SPEC_CONTENT=$(echo "$RESPONSE_JSON" | jq -r '.data.outputs.openapi_spec')
