@@ -56,7 +56,7 @@ jobs:
           echo "File uploaded successfully. Upload ID: $UPLOAD_FILE_ID"
 
           # 步驟 4.3: 【第二步】準備執行工作流的 JSON 資料
-          # *** 根據錯誤日誌修正了變數名稱 ***
+          # *** 根據官方文件修正了 File Array 的格式 ***
           JSON_PAYLOAD=$(jq -n \
                             --arg upload_id "$UPLOAD_FILE_ID" \
                             --arg path_val "c:\\test" \
