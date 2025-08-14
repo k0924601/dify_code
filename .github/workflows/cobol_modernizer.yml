@@ -22,32 +22,71 @@ jobs:
       - name: Checkout COBOL code
         uses: actions/checkout@v4
 
-      # 步驟 4: 呼叫 Dify API 進行分析
+      # 步驟 4: 呼叫 Dify API 進行分析 (已修正)
       - name: Analyze with Dify and Generate Spec
         id: dify_analysis # 給這個步驟一個 ID，方便後續引用其輸出
         run: |
-          # 找到最新的 COBOL 檔案 (可自行優化此邏輯)
-          COBOL_FILE=$(ls *_cbl.txt | head -n 1)
-          echo "Analyzing file: $COBOL_FILE"
+          # 步驟 4.1: 使用 find 指令安全地找到目標檔案
+          COBOL_FILE=$(find . -name "*_cbl.txt" -type f | head -n 1)
 
-          # 使用 curl 呼叫 Dify API
-          # 注意：這裡的 -d 內容需要根據您的 Dify 應用輸入來調整
-          RESPONSE_JSON=$(curl -X POST "https://api.dify.ai/v1/workflows/run" \
+          # 如果找不到檔案，就印出錯誤訊息並終止工作流
+          if [ -z "$COBOL_FILE" ]; then
+            echo "::error::Could not find a file matching '*_cbl.txt'."
+            exit 1
+          fi
+          echo "Found file to analyze: $COBOL_FILE"
+
+          # 步驟 4.2: 【第一步】呼叫 Dify 檔案上傳 API
+          # 這個指令會將您的檔案上傳，並取得一個 upload_file_id
+          echo "Uploading file to Dify..."
+          UPLOAD_RESPONSE_JSON=$(curl -s -X POST "https://api.dify.ai/v1/files/upload" \
             -H "Authorization: Bearer ${{ secrets.DIFY_API_KEY }}" \
-            -H "Content-Type: application/json" \
-            -d '{
-                  "inputs": {
-                    "FILE_UPLOAD": "'$(cat $COBOL_FILE)'"
-                    "path": "c:\\test"
-                  },
-                  "response_mode": "blocking",
-                  "user": "github-actions-user"
-                }')
+            -F "user=github-actions-user" \
+            -F "file=@$COBOL_FILE")
+          
+          # 從回應中提取 upload_file_id
+          UPLOAD_FILE_ID=$(echo "$UPLOAD_RESPONSE_JSON" | jq -r '.id')
 
-          # 從 Dify 的回應中提取 OpenAPI Spec 內容
-          SPEC_CONTENT=$(echo "$RESPONSE_JSON" | jq -r '.data.outputs.openapi_spec') # 假設 Dify 輸出欄位為 openapi_spec
+          # 如果上傳失敗或沒有取得 ID，就終止工作流
+          if [ -z "$UPLOAD_FILE_ID" ] || [ "$UPLOAD_FILE_ID" == "null" ]; then
+            echo "::error::Failed to upload file to Dify or get upload_file_id."
+            echo "Dify Response: $UPLOAD_RESPONSE_JSON"
+            exit 1
+          fi
+          echo "File uploaded successfully. Upload ID: $UPLOAD_FILE_ID"
 
-          # 將 Spec 儲存為檔案，並將檔案路徑設為此步驟的輸出
+          # 步驟 4.3: 【第二步】準備執行工作流的 JSON 資料
+          # *** 請務必確認並修改以下兩個變數名稱 ***
+          # 將 'file_input' 和 'path_input' 替換為您在 Dify 後台看到的真實變數名稱
+          JSON_PAYLOAD=$(jq -n \
+                            --arg upload_id "$UPLOAD_FILE_ID" \
+                            --arg path_val "c:\\test" \
+                            '{
+                              "inputs": {
+                                "file_input": [
+                                  {
+                                    "type": "document",
+                                    "transfer_method": "local_file",
+                                    "upload_file_id": $upload_id
+                                  }
+                                ],
+                                "path_input": $path_val
+                              },
+                              "response_mode": "blocking",
+                              "user": "github-actions-user"
+                            }')
+          
+          echo "Executing workflow with payload..."
+          # 步驟 4.4: 呼叫 Dify 執行工作流 API
+          RESPONSE_JSON=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
+                            -H "Authorization: Bearer ${{ secrets.DIFY_API_KEY }}" \
+                            -H "Content-Type: application/json" \
+                            -d "$JSON_PAYLOAD")
+
+          # 步驟 4.5: 從 Dify 的回應中提取 OpenAPI Spec 內容
+          SPEC_CONTENT=$(echo "$RESPONSE_JSON" | jq -r '.data.outputs.openapi_spec')
+
+          # 步驟 4.6: 將 Spec 儲存為檔案，並將檔案路徑設為此步驟的輸出
           echo "$SPEC_CONTENT" > generated_spec.yaml
           echo "spec_path=generated_spec.yaml" >> $GITHUB_OUTPUT
 
