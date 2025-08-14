@@ -76,12 +76,21 @@ jobs:
                               "user": "github-actions-user"
                             }')
           
-          echo "Executing workflow with payload..."
+          # 【除錯用】印出準備發送的 JSON 內容
+          echo "--- Payload being sent to Dify: ---"
+          echo "$JSON_PAYLOAD"
+          echo "------------------------------------"
+          
           # 步驟 4.4: 呼叫 Dify 執行工作流 API
           RESPONSE_JSON=$(curl -s -X POST "https://api.dify.ai/v1/workflows/run" \
                             -H "Authorization: Bearer ${{ secrets.DIFY_API_KEY }}" \
                             -H "Content-Type: application/json" \
                             -d "$JSON_PAYLOAD")
+
+          # 【除錯用】印出從 Dify 收到的完整回應
+          echo "--- Response received from Dify: ---"
+          echo "$RESPONSE_JSON"
+          echo "------------------------------------"
 
           # 步驟 4.5: 從 Dify 的回應中提取 OpenAPI Spec 內容
           SPEC_CONTENT=$(echo "$RESPONSE_JSON" | jq -r '.data.outputs.openapi_spec')
