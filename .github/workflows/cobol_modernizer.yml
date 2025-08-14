@@ -22,7 +22,7 @@ jobs:
       - name: Checkout COBOL code
         uses: actions/checkout@v4
 
-      # 步驟 4: 呼叫 Dify API 進行分析 (最終修正版)
+      # 步驟 4: 呼叫 Dify API 進行分析 (最終正確版)
       - name: Analyze with Dify and Generate Spec
         id: dify_analysis # 給這個步驟一個 ID，方便後續引用其輸出
         run: |
@@ -56,12 +56,18 @@ jobs:
           echo "File uploaded successfully. Upload ID: $UPLOAD_FILE_ID"
 
           # 步驟 4.3: 【第二步】準備執行工作流的 JSON 資料
-          # *** 根據使用者要求，已刪除 path 參數 ***
+          # *** 根據使用者要求，只傳入 FILE_UPLOAD 參數 ***
           JSON_PAYLOAD=$(jq -n \
                             --arg upload_id "$UPLOAD_FILE_ID" \
                             '{
                               "inputs": {
-                                "FILE_UPLOAD": $upload_id
+                                "FILE_UPLOAD": [
+                                  {
+                                    "type": "document",
+                                    "transfer_method": "local_file",
+                                    "upload_file_id": $upload_id
+                                  }
+                                ]
                               },
                               "response_mode": "blocking",
                               "user": "github-actions-user"
