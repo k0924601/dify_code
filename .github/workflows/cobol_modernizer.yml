@@ -37,7 +37,8 @@ jobs:
             -H "Content-Type: application/json" \
             -d '{
                   "inputs": {
-                    "cobol_code": "'$(cat $COBOL_FILE)'"
+                    "FILE_UPLOAD": "'$(cat $COBOL_FILE)'"
+                    "path": "c:\\test"
                   },
                   "response_mode": "blocking",
                   "user": "github-actions-user"
