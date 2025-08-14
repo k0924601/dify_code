@@ -27,7 +27,7 @@ jobs:
         id: dify_analysis # 給這個步驟一個 ID，方便後續引用其輸出
         run: |
           # 找到最新的 COBOL 檔案 (可自行優化此邏輯)
-          COBOL_FILE=$(ls *_cbl | head -n 1)
+          COBOL_FILE=$(ls *_cbl.txt | head -n 1)
           echo "Analyzing file: $COBOL_FILE"
 
           # 使用 curl 呼叫 Dify API
