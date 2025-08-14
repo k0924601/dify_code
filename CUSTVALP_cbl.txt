@@ -1,0 +1,715 @@
+       IDENTIFICATION DIVISION.
+       PROGRAM-ID. CUSTVALP.
+       AUTHOR. SA-Gemini.
+       DATE-WRITTEN. 2025/05/28.
+       REMARKS. 客戶建檔資料檢核主程式.
+      ******************************************************************
+       ENVIRONMENT DIVISION.
+       INPUT-OUTPUT SECTION.
+       FILE-CONTROL.
+           SELECT CUSTOMER-INPUT-FILE ASSIGN TO "CUSTINP"
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS FS-CUSTINP.
+
+           SELECT VALID-CUSTOMER-FILE ASSIGN TO "CUSTVAL"
+               ORGANIZATION IS SEQUENTIAL
+               ACCESS MODE IS SEQUENTIAL
+               FILE STATUS IS FS-CUSTVAL.
+
+           SELECT ERROR-REPORT-FILE ASSIGN TO "CUSTERR"
+               ORGANIZATION IS LINE SEQUENTIAL
+               FILE STATUS IS FS-CUSTERR.
+      ******************************************************************
+       DATA DIVISION.
+       FILE SECTION.
+       FD CUSTOMER-INPUT-FILE
+          RECORD CONTAINS 2500 CHARACTERS. *> 假設記錄長度, 需與CUSTREC.CPY計算後一致
+       01 INPUT-CUSTOMER-RAW-DATA   PIC X(2500).
+
+       FD VALID-CUSTOMER-FILE
+          RECORD CONTAINS 2500 CHARACTERS.
+       01 VALID-CUSTOMER-OUT-REC    PIC X(2500).
+
+       FD ERROR-REPORT-FILE
+          RECORD CONTAINS 2600 CHARACTERS. *> 原始資料 + 錯誤訊息
+       01 ERROR-REPORT-LINE         PIC X(2600).
+
+       WORKING-STORAGE SECTION.
+       01 WS-FILE-STATUS-FLAGS.
+          05 FS-CUSTINP             PIC X(02).
+             88 FS-CUSTINP-EOF         VALUE "10".
+             88 FS-CUSTINP-OK          VALUE "00".
+          05 FS-CUSTVAL             PIC X(02).
+             88 FS-CUSTVAL-OK          VALUE "00".
+          05 FS-CUSTERR             PIC X(02).
+             88 FS-CUSTERR-OK          VALUE "00".
+
+       01 WS-PROGRAM-SWITCHES.
+          05 SW-VALIDATION-PASSED   PIC X VALUE 'Y'.
+             88 VALIDATION-PASSED      VALUE 'Y'.
+             88 VALIDATION-FAILED      VALUE 'N'.
+
+       01 WS-COUNTERS.
+          05 WS-REC-READ-COUNT      PIC 9(07) VALUE ZERO.
+          05 WS-REC-VALID-COUNT     PIC 9(07) VALUE ZERO.
+          05 WS-REC-ERROR-COUNT     PIC 9(07) VALUE ZERO.
+          05 WS-IDX                 PIC 9(02) VALUE ZERO. *> For OCCURS loops
+
+       01 WS-ERROR-MESSAGE          PIC X(100).
+
+      ******************************************************************
+      * 客戶資料結構 - 從 COPYBOOK 引入                                *
+      ******************************************************************
+       01 WS-CUSTOMER-RECORD.
+          COPY CUSTREC.
+
+      ******************************************************************
+      * 副程式呼叫參數區
+      ******************************************************************
+       01 WS-SUBPROGRAM-PARAMS.
+          05 WS-SP-ID-NUMBER           PIC X(10).
+          05 WS-SP-ID-TYPE             PIC X(01).
+          05 WS-SP-ID-VALID            PIC X(01).
+             88 SP-ID-IS-VALID            VALUE 'Y'.
+             88 SP-ID-IS-INVALID          VALUE 'N'.
+
+          05 WS-SP-DATE-TO-VALIDATE    PIC X(08).
+          05 WS-SP-DATE-REFERENCE      PIC X(08).
+          05 WS-SP-DATE-IS-VALID       PIC X(01).
+             88 SP-DATE-VALID             VALUE 'Y'.
+             88 SP-DATE-INVALID           VALUE 'N'.
+          05 WS-SP-DATE-ERROR-CODE     PIC X(02).
+
+          05 WS-SP-CODE-TYPE           PIC X(20).
+          05 WS-SP-CODE-VALUE          PIC X(50).
+          05 WS-SP-CODE-IS-VALID       PIC X(01).
+             88 SP-CODE-VALID             VALUE 'Y'.
+             88 SP-CODE-INVALID           VALUE 'N'.
+          05 WS-SP-CODE-IS-HIGH-RISK   PIC X(01).
+             88 SP-CODE-HIGH-RISK         VALUE 'Y'.
+             88 SP-CODE-NOT-HIGH-RISK     VALUE 'N'.
+
+          05 WS-SP-ADDR-FULL           PIC N(100).
+          05 WS-SP-ADDR-IS-VALID       PIC X(01).
+             88 SP-ADDR-VALID             VALUE 'Y'.
+             88 SP-ADDR-INVALID           VALUE 'N'.
+          05 WS-SP-ADDR-ERROR-CODE     PIC X(02).
+
+
+       01 WS-CALCULATION-FIELDS.
+          05 WS-CALCULATED-AGE         PIC 9(03).
+          05 WS-CURRENT-SYSTEM-DATE    PIC X(08). *><y_bin_46>MMDD (from ACCEPT)
+          05 WS-MONTHS-DIFFERENCE      PIC S9(05).
+          05 WS-TEMP-NUMERIC           PIC 9(15)V99.
+
+      ******************************************************************
+       PROCEDURE DIVISION.
+       0000-MAIN-PROCESS.
+           PERFORM 1000-INITIALIZE
+             THRU 1000-EXIT.
+           PERFORM 2000-PROCESS-RECORDS
+             THRU 2000-EXIT
+             UNTIL FS-CUSTINP-EOF.
+           PERFORM 3000-TERMINATE
+             THRU 3000-EXIT.
+           STOP RUN.
+       0000-EXIT. EXIT.
+
+       1000-INITIALIZE.
+           DISPLAY "客戶建檔資料檢核程式開始...".
+           OPEN INPUT CUSTOMER-INPUT-FILE
+                OUTPUT VALID-CUSTOMER-FILE
+                       ERROR-REPORT-FILE.
+           IF NOT FS-CUSTINP-OK
+              DISPLAY "嚴重錯誤 - 開啟輸入檔失敗: " FS-CUSTINP
+              MOVE 16 TO RETURN-CODE GOBACK
+           END-IF.
+           IF NOT FS-CUSTVAL-OK
+              DISPLAY "嚴重錯誤 - 開啟有效檔失敗: " FS-CUSTVAL
+              MOVE 16 TO RETURN-CODE GOBACK
+           END-IF.
+           IF NOT FS-CUSTERR-OK
+              DISPLAY "嚴重錯誤 - 開啟錯誤檔失敗: " FS-CUSTERR
+              MOVE 16 TO RETURN-CODE GOBACK
+           END-IF.
+
+           ACCEPT WS-CURRENT-SYSTEM-DATE FROM DATE<y_bin_46>MMDD.
+           PERFORM 1100-READ-INPUT THRU 1100-EXIT.
+       1000-EXIT. EXIT.
+
+       1100-READ-INPUT.
+           READ CUSTOMER-INPUT-FILE
+               AT END SET FS-CUSTINP-EOF TO TRUE
+               NOT AT END
+                   IF FS-CUSTINP-OK
+                      ADD 1 TO WS-REC-READ-COUNT
+                   ELSE
+                      DISPLAY "嚴重錯誤 - 讀取輸入檔失敗: " FS-CUSTINP
+                      SET FS-CUSTINP-EOF TO TRUE *> 嚴重錯誤，中止處理
+                   END-IF
+           END-READ.
+       1100-EXIT. EXIT.
+
+       2000-PROCESS-RECORDS.
+           MOVE INPUT-CUSTOMER-RAW-DATA TO WS-CUSTOMER-RECORD.
+           SET VALIDATION-PASSED TO TRUE. *> 預設為通過檢核
+           MOVE SPACES TO WS-ERROR-MESSAGE.
+
+           PERFORM 2100-VALIDATE-DATA
+             THRU 2100-EXIT.
+
+           IF VALIDATION-PASSED
+              PERFORM 2200-WRITE-VALID-RECORD THRU 2200-EXIT
+              ADD 1 TO WS-REC-VALID-COUNT
+           ELSE
+              ADD 1 TO WS-REC-ERROR-COUNT
+           END-IF.
+
+           PERFORM 1100-READ-INPUT THRU 1100-EXIT.
+       2000-EXIT. EXIT.
+
+       2100-VALIDATE-DATA.
+      ******************************************************************
+      * 主要檢核邏輯
+      ******************************************************************
+           IF NOT (CR-TYPE-INDIVIDUAL OF WS-CUSTOMER-RECORD OR
+                   CR-TYPE-CORPORATE OF WS-CUSTOMER-RECORD)
+              MOVE "E001:客戶類型錯誤或未填('I'或'C')" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+              GO TO 2100-EXIT
+           END-IF.
+
+           PERFORM 2110-VALIDATE-COMMON-HEADER THRU 2110-EXIT.
+
+           IF VALIDATION-PASSED *> 只有先前檢核通過才繼續
+              IF CR-TYPE-INDIVIDUAL OF WS-CUSTOMER-RECORD
+                 PERFORM 2120-VALIDATE-INDIVIDUAL-DATA THRU 2120-EXIT
+              ELSE *> CR-TYPE-CORPORATE
+                 PERFORM 2130-VALIDATE-CORPORATE-DATA THRU 2130-EXIT
+              END-IF
+           END-IF.
+
+           IF VALIDATION-PASSED
+              PERFORM 2140-VALIDATE-ADDRESS-DATA THRU 2140-EXIT
+           END-IF.
+           IF VALIDATION-PASSED
+              PERFORM 2150-VALIDATE-CONTACT-DATA THRU 2150-EXIT
+           END-IF.
+           IF VALIDATION-PASSED
+              PERFORM 2160-VALIDATE-ACCOUNT-SERVICES THRU 2160-EXIT
+           END-IF.
+           IF VALIDATION-PASSED
+              PERFORM 2170-VALIDATE-AML-CFT-DATA THRU 2170-EXIT
+           END-IF.
+
+           IF VALIDATION-PASSED AND CR-TYPE-CORPORATE OF WS-CUSTOMER-RECORD
+              PERFORM 2180-VALIDATE-AUTHORIZATION-DATA THRU 2180-EXIT
+           END-IF.
+
+           IF VALIDATION-PASSED
+              PERFORM 2190-VALIDATE-OTHER-DATA THRU 2190-EXIT
+           END-IF.
+       2100-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2110-VALIDATE-COMMON-HEADER.
+           *> 檢核 CR-ACCOUNT-OPEN-DATE (開戶日期)
+           IF CR-ACCOUNT-OPEN-DATE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E002:開戶日期未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              MOVE CR-ACCOUNT-OPEN-DATE OF WS-CUSTOMER-RECORD TO WS-SP-DATE-TO-VALIDATE
+              MOVE WS-CURRENT-SYSTEM-DATE TO WS-SP-DATE-REFERENCE
+              CALL 'DATEVALR' USING WS-SP-DATE-TO-VALIDATE
+                                     WS-SP-DATE-REFERENCE
+                                     WS-SP-DATE-IS-VALID
+                                     WS-SP-DATE-ERROR-CODE
+              IF NOT SP-DATE-VALID
+                 STRING "E003:開戶日期無效,副程錯誤碼:" DELIMITED BY SIZE
+                        WS-SP-DATE-ERROR-CODE DELIMITED BY SIZE
+                        INTO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 IF CR-ACCOUNT-OPEN-DATE OF WS-CUSTOMER-RECORD > WS-CURRENT-SYSTEM-DATE
+                    MOVE "E004:開戶日期不可為未來日期" TO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    SET VALIDATION-FAILED TO TRUE
+                 END-IF
+              END-IF
+           END-IF.
+           *> 檢核 CR-ACCOUNT-TYPE (帳戶類型)
+           IF CR-ACCOUNT-TYPE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E005:帳戶類型未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+       2110-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2120-VALIDATE-INDIVIDUAL-DATA.
+           *> 檢核 CR-IND-NAME (姓名)
+           IF CR-IND-NAME OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E101:個人戶姓名未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+           *> 檢核 CR-IND-ID-NUMBER (身分證字號)
+           IF CR-IND-ID-NUMBER OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E102:身分證字號未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              MOVE CR-IND-ID-NUMBER OF WS-CUSTOMER-RECORD TO WS-SP-ID-NUMBER
+              MOVE "I" TO WS-SP-ID-TYPE
+              CALL 'IDVALRTN' USING WS-SP-ID-NUMBER
+                                     WS-SP-ID-TYPE
+                                     WS-SP-ID-VALID
+              IF NOT SP-ID-IS-VALID
+                 MOVE "E103:身分證字號格式或檢查碼錯誤" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              END-IF
+           END-IF.
+           *> 檢核 CR-IND-BIRTH-DATE (出生日期) 及 CR-IND-AGE (年齡)
+           IF CR-IND-BIRTH-DATE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E104:出生日期未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              MOVE CR-IND-BIRTH-DATE OF WS-CUSTOMER-RECORD TO WS-SP-DATE-TO-VALIDATE
+              MOVE CR-ACCOUNT-OPEN-DATE OF WS-CUSTOMER-RECORD TO WS-SP-DATE-REFERENCE
+              CALL 'DATEVALR' USING WS-SP-DATE-TO-VALIDATE
+                                     WS-SP-DATE-REFERENCE
+                                     WS-SP-DATE-IS-VALID
+                                     WS-SP-DATE-ERROR-CODE
+              IF NOT SP-DATE-VALID
+                 STRING "E105:出生日期無效,副程錯誤碼:" DELIMITED BY SIZE
+                        WS-SP-DATE-ERROR-CODE DELIMITED BY SIZE
+                        INTO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 PERFORM CALCULATE-AGE
+                   USING CR-IND-BIRTH-DATE OF WS-CUSTOMER-RECORD
+                         CR-ACCOUNT-OPEN-DATE OF WS-CUSTOMER-RECORD
+                   GIVING WS-CALCULATED-AGE.
+                 IF CR-IND-AGE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES OR
+                    CR-IND-AGE OF WS-CUSTOMER-RECORD IS NOT NUMERIC
+                    MOVE "E106A:提供年齡未填或非數字" TO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    SET VALIDATION-FAILED TO TRUE
+                 ELSE
+                    IF WS-CALCULATED-AGE NOT = FUNCTION NUMVAL(CR-IND-AGE OF WS-CUSTOMER-RECORD)
+                       MOVE "E106B:提供年齡與出生日期計算不符" TO WS-ERROR-MESSAGE
+                       PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                       SET VALIDATION-FAILED TO TRUE
+                    END-IF
+                 END-IF.
+                 IF WS-CALCULATED-AGE < 18 AND
+                    (CR-IND-LEGAL-REP-FLAG OF WS-CUSTOMER-RECORD NOT = 'Y')
+                    MOVE "W107:客戶未滿18歲且未註記法定代理人" TO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    SET VALIDATION-FAILED TO TRUE
+                 END-IF
+              END-IF
+           END-IF.
+           *> 檢核 CR-IND-NATIONALITY (國籍)
+           IF CR-IND-NATIONALITY OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E108:國籍未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              MOVE "NATIONALITY" TO WS-SP-CODE-TYPE
+              MOVE CR-IND-NATIONALITY OF WS-CUSTOMER-RECORD TO WS-SP-CODE-VALUE
+              CALL 'CODEVALR' USING WS-SP-CODE-TYPE
+                                     WS-SP-CODE-VALUE
+                                     WS-SP-CODE-IS-VALID
+                                     WS-SP-CODE-IS-HIGH-RISK
+              IF NOT SP-CODE-VALID
+                 MOVE "E109:國籍代碼無效" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 IF CR-ACCOUNT-TYPE OF WS-CUSTOMER-RECORD = "DIGITAL" AND
+                    CR-IND-NATIONALITY OF WS-CUSTOMER-RECORD NOT = "TWN"
+                    MOVE "E110:數位帳戶僅接受本國籍(TWN)" TO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    SET VALIDATION-FAILED TO TRUE
+                 END-IF
+              END-IF
+           END-IF.
+           *> 檢核 CR-IND-OCCUPATION-CODE (職業)
+           IF CR-IND-OCCUPATION-CODE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E111:職業代碼未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              MOVE "OCCUPATION" TO WS-SP-CODE-TYPE
+              MOVE CR-IND-OCCUPATION-CODE OF WS-CUSTOMER-RECORD TO WS-SP-CODE-VALUE
+              CALL 'CODEVALR' USING WS-SP-CODE-TYPE
+                                     WS-SP-CODE-VALUE
+                                     WS-SP-CODE-IS-VALID
+                                     WS-SP-CODE-IS-HIGH-RISK
+              IF NOT SP-CODE-VALID
+                 MOVE "E112:職業代碼無效" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 IF SP-CODE-HIGH-RISK
+                    MOVE "W113:此職業代碼標註為高風險" TO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 END-IF
+              END-IF
+           END-IF.
+       2120-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       CALCULATE-AGE USING P-BIRTH-DATE  PIC X(08)
+                           P-REF-DATE    PIC X(08)
+                   GIVING  P-CALC-AGE    PIC 9(03).
+           IF P-BIRTH-DATE IS NUMERIC AND P-REF-DATE IS NUMERIC
+              COMPUTE P-CALC-AGE =
+                  FUNCTION NUMVAL (P-REF-DATE (1:4))
+                - FUNCTION NUMVAL (P-BIRTH-DATE (1:4)).
+              IF P-REF-DATE (5:4) < P-BIRTH-DATE (5:4)
+                 SUBTRACT 1 FROM P-CALC-AGE
+              END-IF
+           ELSE
+              MOVE 999 TO P-CALC-AGE *> 表示計算失敗
+           END-IF.
+       CALCULATE-AGE-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2130-VALIDATE-CORPORATE-DATA.
+           *> 檢核 CR-CORP-NAME (公司名稱)
+           IF CR-CORP-NAME OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E201:公司名稱未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+           *> 檢核 CR-CORP-REG-NUMBER (統一編號)
+           IF CR-CORP-REG-NUMBER OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E202:公司統一編號未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              MOVE CR-CORP-REG-NUMBER OF WS-CUSTOMER-RECORD TO WS-SP-ID-NUMBER
+              MOVE "C" TO WS-SP-ID-TYPE
+              CALL 'IDVALRTN' USING WS-SP-ID-NUMBER
+                                     WS-SP-ID-TYPE
+                                     WS-SP-ID-VALID
+              IF NOT SP-ID-IS-VALID
+                 MOVE "E203:公司統一編號格式或檢查碼錯誤" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              END-IF
+           END-IF.
+           *> 檢核 CR-CORP-ESTABLISH-DATE (設立日期)
+           IF CR-CORP-ESTABLISH-DATE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E204:公司設立日期未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              MOVE CR-CORP-ESTABLISH-DATE OF WS-CUSTOMER-RECORD TO WS-SP-DATE-TO-VALIDATE
+              MOVE CR-ACCOUNT-OPEN-DATE OF WS-CUSTOMER-RECORD TO WS-SP-DATE-REFERENCE
+              CALL 'DATEVALR' USING WS-SP-DATE-TO-VALIDATE
+                                     WS-SP-DATE-REFERENCE
+                                     WS-SP-DATE-IS-VALID
+                                     WS-SP-DATE-ERROR-CODE
+              IF NOT SP-DATE-VALID
+                 STRING "E205:公司設立日期無效,副程錯誤碼:" DELIMITED BY SIZE
+                        WS-SP-DATE-ERROR-CODE DELIMITED BY SIZE
+                        INTO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 IF CR-CORP-STAMP-INFO OF WS-CUSTOMER-RECORD NOT CONTAINS "籌備處"
+                    PERFORM CALCULATE-MONTHS-DIFFERENCE
+                       USING CR-CORP-ESTABLISH-DATE OF WS-CUSTOMER-RECORD
+                             CR-ACCOUNT-OPEN-DATE OF WS-CUSTOMER-RECORD
+                       GIVING WS-MONTHS-DIFFERENCE
+                    IF WS-MONTHS-DIFFERENCE < 6 AND WS-MONTHS-DIFFERENCE >= 0
+                       MOVE "E206:公司設立未滿6個月(非籌備處)" TO WS-ERROR-MESSAGE
+                       PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                       SET VALIDATION-FAILED TO TRUE
+                    ELSE IF WS-MONTHS-DIFFERENCE < 0
+                       MOVE "E207:公司設立日期晚於開戶日期" TO WS-ERROR-MESSAGE
+                       PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                       SET VALIDATION-FAILED TO TRUE
+                    END-IF
+                 END-IF
+              END-IF
+           END-IF.
+           PERFORM 2135-VALIDATE-OPERATING-FINANCIAL THRU 2135-EXIT.
+       2130-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       CALCULATE-MONTHS-DIFFERENCE USING P-START-DATE  PIC X(08)
+                                       P-END-DATE    PIC X(08)
+                               GIVING  P-MONTH-DIFF  PIC S9(05).
+           INITIALIZE P-MONTH-DIFF.
+           IF P-START-DATE IS NUMERIC AND P-END-DATE IS NUMERIC
+              COMPUTE P-MONTH-DIFF =
+                  (FUNCTION NUMVAL(P-END-DATE(1:4)) - FUNCTION NUMVAL(P-START-DATE(1:4))) * 12
+                + (FUNCTION NUMVAL(P-END-DATE(5:2)) - FUNCTION NUMVAL(P-START-DATE(5:2))).
+              IF FUNCTION NUMVAL(P-END-DATE(7:2)) < FUNCTION NUMVAL(P-START-DATE(7:2)) AND
+                 (P-END-DATE(1:6) NOT = P-START-DATE(1:6)) AND P-MONTH-DIFF > 0
+                 SUBTRACT 1 FROM P-MONTH-DIFF
+              END-IF
+           ELSE
+              MOVE -9999 TO P-MONTH-DIFF *> 表示計算失敗
+           END-IF.
+       CALCULATE-MONTHS-DIFFERENCE-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2135-VALIDATE-OPERATING-FINANCIAL.
+           IF CR-TYPE-CORPORATE OF WS-CUSTOMER-RECORD
+              IF CR-OP-BUSINESS-NATURE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+                 MOVE "E301:行業種類未填" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 MOVE "BUSINESSNATURE" TO WS-SP-CODE-TYPE
+                 MOVE CR-OP-BUSINESS-NATURE OF WS-CUSTOMER-RECORD TO WS-SP-CODE-VALUE
+                 CALL 'CODEVALR' USING WS-SP-CODE-TYPE
+                                        WS-SP-CODE-VALUE
+                                        WS-SP-CODE-IS-VALID
+                                        WS-SP-CODE-IS-HIGH-RISK
+                 IF NOT SP-CODE-VALID
+                    MOVE "E302:行業種類代碼無效" TO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    SET VALIDATION-FAILED TO TRUE
+                 ELSE
+                    IF SP-CODE-HIGH-RISK
+                       MOVE "W303:此行業種類標註為高風險" TO WS-ERROR-MESSAGE
+                       PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    END-IF
+                 END-IF
+              END-IF.
+              IF CR-OP-MONTHLY-SALES OF WS-CUSTOMER-RECORD NOT = SPACES AND
+                 CR-OP-MONTHLY-SALES OF WS-CUSTOMER-RECORD IS NOT NUMERIC
+                 MOVE "E304:每月銷售總額需為數值" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              END-IF
+           END-IF.
+       2135-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2140-VALIDATE-ADDRESS-DATA.
+           *> 檢核戶籍地址 (CR-ADDR-RESIDENCE)
+           IF CR-ADDR-RES-FULL OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              IF CR-TYPE-INDIVIDUAL OF WS-CUSTOMER-RECORD
+                 MOVE "E401A:個人戶籍地址未填" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              END-IF
+           ELSE
+              MOVE CR-ADDR-RES-FULL OF WS-CUSTOMER-RECORD TO WS-SP-ADDR-FULL
+              CALL 'ADDRVALR' USING WS-SP-ADDR-FULL
+                                     WS-SP-ADDR-IS-VALID
+                                     WS-SP-ADDR-ERROR-CODE
+              IF NOT SP-ADDR-VALID
+                 STRING "E401B:戶籍地址基礎檢核失敗,副程碼:" DELIMITED BY SIZE
+                        WS-SP-ADDR-ERROR-CODE DELIMITED BY SIZE
+                        INTO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              END-IF
+           END-IF.
+
+           *> 檢核通訊地址 (CR-ADDR-MAILING)
+           IF CR-ADDR-MAIL-SAME-AS-RES OF WS-CUSTOMER-RECORD NOT = 'Y'
+              IF CR-ADDR-MAIL-FULL OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+                 MOVE "E402A:通訊地址未填(且未註明同戶籍)" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 MOVE CR-ADDR-MAIL-FULL OF WS-CUSTOMER-RECORD TO WS-SP-ADDR-FULL
+                 CALL 'ADDRVALR' USING WS-SP-ADDR-FULL
+                                        WS-SP-ADDR-IS-VALID
+                                        WS-SP-ADDR-ERROR-CODE
+                 IF NOT SP-ADDR-VALID
+                    STRING "E402B:通訊地址基礎檢核失敗,副程碼:" DELIMITED BY SIZE
+                           WS-SP-ADDR-ERROR-CODE DELIMITED BY SIZE
+                           INTO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    SET VALIDATION-FAILED TO TRUE
+                 END-IF
+              END-IF
+           END-IF.
+
+           *> 檢核公司地址 (CR-ADDR-COMPANY) - 企業戶必填
+           IF CR-TYPE-CORPORATE OF WS-CUSTOMER-RECORD
+              IF CR-ADDR-COMP-FULL OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+                 MOVE "E403A:企業戶公司地址未填" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 MOVE CR-ADDR-COMP-FULL OF WS-CUSTOMER-RECORD TO WS-SP-ADDR-FULL
+                 CALL 'ADDRVALR' USING WS-SP-ADDR-FULL
+                                        WS-SP-ADDR-IS-VALID
+                                        WS-SP-ADDR-ERROR-CODE
+                 IF NOT SP-ADDR-VALID
+                    STRING "E403B:公司地址基礎檢核失敗,副程碼:" DELIMITED BY SIZE
+                           WS-SP-ADDR-ERROR-CODE DELIMITED BY SIZE
+                           INTO WS-ERROR-MESSAGE
+                    PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                    SET VALIDATION-FAILED TO TRUE
+                 END-IF
+              END-IF
+           END-IF.
+       2140-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2150-VALIDATE-CONTACT-DATA.
+           IF CR-CONTACT-PHONE-HOME OF WS-CUSTOMER-RECORD = SPACES AND
+              CR-CONTACT-PHONE-WORK OF WS-CUSTOMER-RECORD = SPACES AND
+              CR-CONTACT-PHONE-MOBILE OF WS-CUSTOMER-RECORD = SPACES
+              MOVE "E501:至少需提供一組聯絡電話" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+           IF CR-CONTACT-EMAIL OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E502:電子郵件未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           ELSE
+              IF CR-CONTACT-EMAIL OF WS-CUSTOMER-RECORD NOT CONTAINS "@" OR
+                 CR-CONTACT-EMAIL OF WS-CUSTOMER-RECORD NOT CONTAINS "."
+                 MOVE "E503:電子郵件格式錯誤(需含@及.)" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              END-IF
+           END-IF.
+       2150-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2160-VALIDATE-ACCOUNT-SERVICES.
+           IF CR-ACC-PURPOSE OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E601:開戶目的未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+           IF CR-ACC-CURRENCIES OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+              MOVE "E602:開立幣別未填" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+       2160-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2170-VALIDATE-AML-CFT-DATA.
+           IF CR-AML-FUND-SOURCE-TYPE OF WS-CUSTOMER-RECORD = SPACES OR
+              CR-AML-FUND-SOURCE-METHOD OF WS-CUSTOMER-RECORD = SPACES OR
+              CR-AML-FUND-SOURCE-COUNTRY OF WS-CUSTOMER-RECORD = SPACES
+              MOVE "E701:資金來源類型/方式/來源國未完整填寫" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+           IF (CR-AML-EXPECTED-MONTHLY-DEPOSIT OF WS-CUSTOMER-RECORD NOT = SPACES AND
+               CR-AML-EXPECTED-MONTHLY-DEPOSIT OF WS-CUSTOMER-RECORD IS NOT NUMERIC) OR
+              (CR-AML-EXPECTED-MONTHLY-WITHDRAW OF WS-CUSTOMER-RECORD NOT = SPACES AND
+               CR-AML-EXPECTED-MONTHLY-WITHDRAW OF WS-CUSTOMER-RECORD IS NOT NUMERIC) OR
+              (CR-AML-EXPECTED-MONTHLY-TXN-CNT OF WS-CUSTOMER-RECORD NOT = SPACES AND
+               CR-AML-EXPECTED-MONTHLY-TXN-CNT OF WS-CUSTOMER-RECORD IS NOT NUMERIC)
+              MOVE "E702:預期月交易量或筆數若有值需為數值" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+           IF CR-TYPE-CORPORATE OF WS-CUSTOMER-RECORD
+              IF CR-AML-BO-NAME OF WS-CUSTOMER-RECORD(1) = SPACES OR LOW-VALUES
+                 MOVE "E703:企業戶需至少填寫一筆實質受益人姓名" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              ELSE
+                 PERFORM VARYING WS-IDX FROM 1 BY 1 UNTIL WS-IDX > 5
+                    IF CR-AML-BO-NAME OF WS-CUSTOMER-RECORD(WS-IDX) NOT = SPACES AND
+                       CR-AML-BO-NAME OF WS-CUSTOMER-RECORD(WS-IDX) NOT = LOW-VALUES
+                       IF CR-AML-BO-ID-NUMBER OF WS-CUSTOMER-RECORD(WS-IDX) = SPACES OR
+                          CR-AML-BO-NATIONALITY OF WS-CUSTOMER-RECORD(WS-IDX) = SPACES OR
+                          CR-AML-BO-ADDRESS OF WS-CUSTOMER-RECORD(WS-IDX) = SPACES
+                          STRING "E704:實質受益人 #" DELIMITED BY SIZE
+                                 WS-IDX DELIMITED BY SIZE
+                                 " (姓名:" DELIMITED BY SIZE
+                                 FUNCTION TRIM(CR-AML-BO-NAME OF WS-CUSTOMER-RECORD(WS-IDX))
+                                 DELIMITED BY SIZE
+                                 ") 資料未完整(ID/國籍/地址)" DELIMITED BY SIZE
+                                 INTO WS-ERROR-MESSAGE
+                          PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                          SET VALIDATION-FAILED TO TRUE
+                       END-IF
+                    END-IF
+                 END-PERFORM
+              END-IF
+           END-IF.
+       2170-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2180-VALIDATE-AUTHORIZATION-DATA.
+           IF CR-TYPE-CORPORATE OF WS-CUSTOMER-RECORD
+              IF CR-AUTH-RP-NAME OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES OR
+                 CR-AUTH-RP-ID-NUMBER OF WS-CUSTOMER-RECORD = SPACES OR LOW-VALUES
+                 MOVE "E801:企業戶負責人姓名或ID未填" TO WS-ERROR-MESSAGE
+                 PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+                 SET VALIDATION-FAILED TO TRUE
+              END-IF
+           END-IF.
+       2180-EXIT. EXIT.
+
+      *----------------------------------------------------------------*
+       2190-VALIDATE-OTHER-DATA.
+           IF CR-OTHER-DECLARATION-CONFIRM OF WS-CUSTOMER-RECORD NOT = 'Y'
+              MOVE "E901:聲明事項確認未勾選'Y'" TO WS-ERROR-MESSAGE
+              PERFORM 2300-WRITE-ERROR-REPORT THRU 2300-EXIT
+              SET VALIDATION-FAILED TO TRUE
+           END-IF.
+       2190-EXIT. EXIT.
+
+       2200-WRITE-VALID-RECORD.
+           MOVE WS-CUSTOMER-RECORD TO VALID-CUSTOMER-OUT-REC.
+           WRITE VALID-CUSTOMER-OUT-REC.
+           IF NOT FS-CUSTVAL-OK
+              DISPLAY "嚴重錯誤 - 寫入有效檔失敗: " FS-CUSTVAL
+              PERFORM 3000-TERMINATE THRU 3000-EXIT
+              MOVE 16 TO RETURN-CODE GOBACK
+           END-IF.
+       2200-EXIT. EXIT.
+
+       2300-WRITE-ERROR-REPORT.
+           STRING "錯誤資料REC[" DELIMITED BY SIZE
+                  WS-REC-READ-COUNT DELIMITED BY SIZE
+                  "]: " DELIMITED BY SIZE
+                  INPUT-CUSTOMER-RAW-DATA DELIMITED BY SIZE
+                  " ===> 錯誤訊息: " DELIMITED BY SIZE
+                  FUNCTION TRIM(WS-ERROR-MESSAGE) DELIMITED BY SIZE
+                  INTO ERROR-REPORT-LINE.
+           WRITE ERROR-REPORT-LINE.
+           IF NOT FS-CUSTERR-OK
+              DISPLAY "嚴重錯誤 - 寫入錯誤檔失敗: " FS-CUSTERR
+              PERFORM 3000-TERMINATE THRU 3000-EXIT
+              MOVE 16 TO RETURN-CODE GOBACK
+           END-IF.
+       2300-EXIT. EXIT.
+
+       3000-TERMINATE.
+           CLOSE CUSTOMER-INPUT-FILE
+                 VALID-CUSTOMER-FILE
+                 ERROR-REPORT-FILE.
+           DISPLAY " ".
+           DISPLAY "客戶建檔資料檢核程式執行完畢".
+           DISPLAY "--------------------------------------------------".
+           DISPLAY "總讀取筆數    : " WS-REC-READ-COUNT.
+           DISPLAY "檢核成功筆數  : " WS-REC-VALID-COUNT.
+           DISPLAY "檢核失敗筆數  : " WS-REC-ERROR-COUNT.
+           DISPLAY "--------------------------------------------------".
+           IF WS-REC-ERROR-COUNT > 0
+              DISPLAY "詳細錯誤請參考 CUSTERR 檔案."
+           ELSE
+              DISPLAY "所有資料檢核成功!"
+           END-IF.
+       3000-EXIT. EXIT.
