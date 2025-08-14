@@ -56,21 +56,20 @@ jobs:
           echo "File uploaded successfully. Upload ID: $UPLOAD_FILE_ID"
 
           # 步驟 4.3: 【第二步】準備執行工作流的 JSON 資料
-          # *** 請務必確認並修改以下兩個變數名稱 ***
-          # 將 'file_input' 和 'path_input' 替換為您在 Dify 後台看到的真實變數名稱
+          # *** 根據錯誤日誌修正了變數名稱 ***
           JSON_PAYLOAD=$(jq -n \
                             --arg upload_id "$UPLOAD_FILE_ID" \
                             --arg path_val "c:\\test" \
                             '{
                               "inputs": {
-                                "file_input": [
+                                "FILE_UPLOAD": [
                                   {
                                     "type": "document",
                                     "transfer_method": "local_file",
                                     "upload_file_id": $upload_id
                                   }
                                 ],
-                                "path_input": $path_val
+                                "path": $path_val
                               },
                               "response_mode": "blocking",
                               "user": "github-actions-user"
